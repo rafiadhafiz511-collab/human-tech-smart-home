@@ -16,7 +16,7 @@ app = FastAPI(title="Smart Home Automation API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -48,7 +48,7 @@ def check_and_execute_schedules():
     finally:
         db.close()
 
-# FastAPI স্টার্ট হওয়ার সময় ব্যাকগ্রাউন্ড শিডিউলার চালু করা
+# FastAPI স্টার্ট হওয়ার সময় ব্যাকগ্রাউন্ড শিডিউলার চালু করা
 @app.on_event("startup")
 def startup_event():
     scheduler = BackgroundScheduler()
@@ -81,8 +81,44 @@ def create_device(
     return db_device
 
 
+# --- ESP32 ও পাবলিক ডিভাইস স্ট্যাটাস এন্ডপয়েন্ট ---
+
+@app.get("/api/devices/{device_id}/status")
+def get_device_status(device_id: int, db: Session = Depends(get_db)):
+    """ESP32 এই লিংকে রিকোয়েস্ট পাঠিয়ে জানবে লাইট অন হবে না অফ"""
+    device = db.query(models.Device).filter(models.Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    return {
+        "device_id": device.id,
+        "name": device.name,
+        "status": device.status # true (ON) অথবা false (OFF)
+    }
+
+
+class DeviceStatusUpdate(BaseModel):
+    status: bool
+
+
+@app.post("/api/devices/{device_id}/toggle")
+def toggle_device_public(device_id: int, payload: DeviceStatusUpdate, db: Session = Depends(get_db)):
+    """বাইরের ডিভাইস বা টেস্টের জন্য ডিরেক্ট স্ট্যাটাস টগল"""
+    device = db.query(models.Device).filter(models.Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    device.status = payload.status
+    db.commit()
+    db.refresh(device)
+    
+    return {"message": "Status updated successfully", "status": device.status}
+
+
+# --- ড্যাশবোর্ড ইউজার টগল এন্ডপয়েন্ট (Bearer Token সহ) ---
+
 @app.patch("/devices/{device_id}/toggle", response_model=schemas.DeviceResponse)
-def toggle_device(
+def toggle_device_auth(
     device_id: int,
     status: bool,
     db: Session = Depends(get_db),
